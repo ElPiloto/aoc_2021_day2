@@ -1,17 +1,63 @@
-from enum import Enum
-from typing import Optional
+from enum import IntEnum
+from typing import List, Optional
 import numpy as np
 import tensorflow as tf
+from hard_coded import solution as hc_solution
 
 
-class Commands(Enum):
-  FWD = 0
+AOC_INPUT_FILE = './aoc_input.txt'
+
+
+class Commands(IntEnum):
+  FORWARD = 0
   UP = 1
   DOWN = 2
 
   @classmethod
   def values(cls):
     return list(map(lambda c: c.value, cls))
+
+CMD_TO_VECTOR = {
+    Commands.FORWARD: np.array([1., 0.]),
+    Commands.UP: np.array([0., -1.]),
+    Commands.DOWN: np.array([0., 1.]),
+}
+
+
+def get_new_position(pos: np.ndarray, cmd: Commands, magnitude: float):
+  """Returns new position after executing cmd."""
+  delta = CMD_TO_VECTOR[cmd]
+  new_pos = pos + delta * magnitude
+  return new_pos
+
+
+def command_idx_to_onehot(idx: int) -> np.ndarray:
+  all_onehots = np.eye(3)
+  command_onehot = np.squeeze(all_onehots[idx])
+  return command_onehot
+
+
+def solve_cumulative(lines: List[str]):
+  inputs = []
+  positions = []
+
+  old_pos = np.zeros(shape=(2), dtype=np.float32)
+  for l in lines:
+    cmd, magnitude = l.split(' ')
+    cmd = cmd.upper()
+    cmd = Commands[cmd]
+    cmd_idx = cmd.value
+    cmd_onehot = command_idx_to_onehot(cmd_idx)
+    magnitude = float(magnitude)
+
+    # TODO(elpiloto): Convert cmd to onehot
+    this_input = np.concatenate([np.copy(old_pos), cmd_onehot, [magnitude]])
+    inputs.append(this_input)
+    delta = CMD_TO_VECTOR[cmd]
+    new_pos = delta * magnitude + old_pos
+    positions.append(np.copy(new_pos))
+    old_pos = new_pos
+  return inputs, positions
 
 
 class SyntheticGenerator():
@@ -41,13 +87,12 @@ class SyntheticGenerator():
 
         # pick command
         unique_commands = len(Commands.values())
-        #command = self.rng_state.choice(range)
-        command = self.rng_state.randint(
+        command_idx = self.rng_state.randint(
             low = 0,
             high = unique_commands,
             size=(1)
         )
-        # TODO(elpiloto): Convert this to onehot.
+        command_onehot = command_idx_to_onehot(command_idx)
 
         # pick magnitude
         magnitude = self.rng_state.randint(
@@ -55,10 +100,31 @@ class SyntheticGenerator():
             high = self.max_magnitude,
             size=(1)
         )
-        values = np.concatenate([pos, command, magnitude])
+        # [x, y, FWD_binary, UP_binary, DOWN_binary, magnitude]
+        values = np.concatenate([pos, command_onehot, magnitude])
         values = values.astype(np.float32)
-        # TODO(elpiloto): Add output here!!!
-        yield values
+
+        # Get new position
+        new_pos = get_new_position(
+            values[:2],
+            Commands(command_idx),
+            values[-1],
+        )
+        yield values, new_pos
+    return _generator
+
+
+class AOCInputGenerator():
+
+  def __init__(self, input_file: str = AOC_INPUT_FILE):
+    lines = hc_solution.read_file(input_file)
+    self._inputs, self._targets = solve_cumulative(lines)
+    self._num_examples = len(self._inputs)
+
+  def generator(self):
+    def _generator():
+      for i in range(self._num_examples):
+        yield self._inputs[i], self._targets[i]
     return _generator
 
 
@@ -70,21 +136,9 @@ class BatchDataset:
   def __call__(self, batch_size: int):
     ds = tf.data.Dataset.from_generator(
             self._generator,
-            (tf.float32),
-            output_shapes=((4,)),
+            (tf.float32, tf.float32),
+            output_shapes=((6,), (2,)),
     )
     ds = ds.batch(batch_size=batch_size)
     return ds
 
-if True:
-  def integration():
-    synthetic_generator = SyntheticGenerator()
-    ds = BatchDataset(synthetic_generator.generator())
-    return ds
-
-  ds = integration()
-  batch_iterator = ds(batch_size=10).as_numpy_iterator()
-  i = 0
-  for i in range(10):
-    print(next(batch_iterator))
-  __import__('pdb').set_trace()

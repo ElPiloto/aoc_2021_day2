@@ -1,8 +1,8 @@
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 import numpy as np
 
 
-INPUT_FILE = './aoc_input.txt'
+INPUT_FILE = '../aoc_input.txt'
 cmd_to_vector = {
     'forward': np.array([1., 0.]),
     'up': np.array([0., -1.]),
@@ -15,8 +15,8 @@ def parse_line(x: str) -> Tuple[str, int]:
   return cmd, int(magnitude)
 
 
-def read_file() -> List[str]:
-  with open(INPUT_FILE) as file:
+def read_file(fname: Optional[str] = INPUT_FILE) -> List[str]:
+  with open(fname) as file:
     lines = [line.rstrip() for line in file]
   return lines
 
@@ -31,5 +31,6 @@ def solve(lines: List[str]):
   print(f'Final position: {pos}, product: {product}')
 
 
-lines = read_file()
-solve(lines)
+if __name__ == '__main__':
+  lines = read_file()
+  solve(lines)
