@@ -1,5 +1,7 @@
 from enum import IntEnum
-from typing import List, Optional
+from typing import List, Iterable, Optional
+
+import ml_collections
 import numpy as np
 import tensorflow as tf
 from hard_coded import solution as hc_solution
@@ -142,3 +144,19 @@ class BatchDataset:
     ds = ds.batch(batch_size=batch_size)
     return ds
 
+def build_train_data(train_config: ml_collections.ConfigDict, train_seed: int,
+    batch_size: int) -> Iterable:
+  min_pos = train_config['min_pos']
+  max_pos = train_config['max_pos']
+  min_magnitude = train_config['min_magnitude']
+  max_magnitude = train_config['max_magnitude']
+  generator = SyntheticGenerator(
+      min_pos=min_pos,
+      max_pos=max_pos,
+      min_magnitude=min_magnitude,
+      max_magnitude=max_magnitude,
+      rng_seed=train_seed,
+  )
+  ds = BatchDataset(generator.generator())
+  batch_iterator = ds(batch_size=batch_size).as_numpy_iterator()
+  return batch_iterator

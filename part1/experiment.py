@@ -1,10 +1,12 @@
 """Jaxline experiment for solving Day 2, Part Advent of Code."""
 import functools
+import os
 from typing import Dict, Optional
 
 from absl import app
 from absl import logging
 from absl import flags
+import pickle
 import haiku as hk
 from haiku import data_structures
 import jax
@@ -19,7 +21,9 @@ import optax
 import tensorflow as tf
 import wandb
 
+import analysis
 import dataset
+import models
 
 np.set_printoptions(suppress=True, precision=5)
 tf.config.set_visible_devices([], 'GPU')
@@ -45,7 +49,7 @@ def get_config():
   exp = config.experiment_kwargs = ml_collections.ConfigDict()
   exp.train_seed = 107993
   exp.eval_seed = 8802
-  exp.learning_rate = 1e-8
+  exp.learning_rate = 1e-1
   exp.batch_size = 256
 
   exp.data_config = ml_collections.ConfigDict()
@@ -53,7 +57,7 @@ def get_config():
   train.min_pos = 0
   train.max_pos = 2000
   train.min_magnitude = 0
-  train.max_magnitude = 20
+  train.max_magnitude = 10
 
   eval = exp.data_config.eval = ml_collections.ConfigDict()
   eval.name = ["eval"]
@@ -63,8 +67,11 @@ def get_config():
   eval.max_magnitude = [20,]
 
   model = exp.model = ml_collections.ConfigDict()
-  model.output_sizes = [256, 256, 2]
+  model.name = 'skip_connection_mlp'
+  model.output_sizes = [2]
   model.activation_fn = 'relu'
+  model.magnitude_scale = 10.
+  model.remove_pos = True
   wandb.config.update(exp.to_dict())
   return config
 
@@ -81,7 +88,7 @@ def mean_squared_error(params, model, inputs, targets):
 
 
 def rounded_mean_squared_error(params, model, inputs, targets):
-  """Computes the mean squared error."""
+  """Computes the rounded mean squared error, not for training with!"""
   model_output = model.apply(params, inputs)
   model_output = jnp.round(model_output)
   # dimensions: [batch_size, 2]
@@ -90,11 +97,31 @@ def rounded_mean_squared_error(params, model, inputs, targets):
   mse = jnp.mean(summed)
   return mse, model_output
 
+
+def show_model_predictions(inputs, targets, predictions, num_examples=1,
+    from_end=False):
+  """Prints out model prediction versus ground truth."""
+  for i in range(num_examples):
+    if from_end:
+      prediction = predictions[-(i+1)]
+    else:
+      prediction = predictions[i]
+    target = targets[i]
+    example = inputs[i]
+    pos = example[:2]
+    cmd_onehot = example[2:5]
+    cmd_idx = np.argmax(cmd_onehot)
+    cmd = dataset.Commands(cmd_idx).name
+    magnitude = example[5]
+    print(f'Input pos: {pos[0]}, {pos[1]}, {cmd} {magnitude}\n-->  True: {target[0]}, {target[1]},\n--> Model: {prediction[0]}, {prediction[1]}')
+
 class Experiment(experiment.AbstractExperiment):
 
+  CHECKPOINT_ATTRS = {}
   NON_BROADCAST_CHECKPOINT_ATTRS = {
        '_params': '_params',
        '_opt_state': '_opt_state',
+       '_config': '_config',
   }
 
   def __init__(self,
@@ -136,61 +163,47 @@ class Experiment(experiment.AbstractExperiment):
         )
         # build our optimizer
         sched = optax.piecewise_constant_schedule(
-            self._learning_rate,
+            -self._learning_rate,
             {
-              10: 1.,
+              600: 0.1,
+              3000: 0.01,
+              5000: 0.001,
             }
         )
         # We put this in a optax schedule just for easy logging.
         self._sched = sched
-        opt = optax.adam(learning_rate=sched)
+        #opt = optax.adam(learning_rate=sched, b1=0.6, b2=0.6666)
+        opt = optax.chain(
+          optax.clip(1.),
+          optax.scale_by_adam(b1=0.6, b2=0.6666),
+          optax.scale_by_schedule(sched),
+        )
         self._opt_state = opt.init(self._params)
         # Example output, I just like to keep this.
         _ = self._model.apply(self._params, train_inputs)
-        # build our update fn, which is called by our step function
 
+        # build our update fn, which is called by our step function
         # Make update function.
+        @jax.jit
         def update_fn(params, inputs, targets):
           loss, grads = jax.value_and_grad(mean_squared_error)(params, self._model, inputs,
               targets)
           updates, opt_state = opt.update(grads, self._opt_state, params)
           params = optax.apply_updates(params, updates)
           return params, opt_state, loss
-        self._update_fn = jax.jit(update_fn)
+        self._update_fn = update_fn
 
   def _initialize_model(self):
-    activation = self._model_config.activation_fn
-    try:
-      activation_fn = getattr(jax.nn, activation)
-    except:
-      raise ValueError(f'Unknown activation function: {activation}')
-    def _forward(inputs):
-      output = hk.nets.MLP(
-          output_sizes=self._model_config.output_sizes,
-          activation=activation_fn,
-          activate_final=True,
-          )(inputs)
-      return output
-    return _forward
-
-
+    return models.get_model(
+        self._model_config.name,
+        self._model_config
+    )
 
   def _build_train_data(self):
-    ds_config = self._data_config['train']
-    min_pos = ds_config['min_pos']
-    max_pos = ds_config['max_pos']
-    min_magnitude = ds_config['min_magnitude']
-    max_magnitude = ds_config['max_magnitude']
-    generator = dataset.SyntheticGenerator(
-        min_pos=min_pos,
-        max_pos=max_pos,
-        min_magnitude=min_magnitude,
-        max_magnitude=max_magnitude,
-        rng_seed=self._train_seed,
-    )
-    ds = dataset.BatchDataset(generator.generator())
-    batch_iterator = ds(batch_size=self._batch_size).as_numpy_iterator()
-    return batch_iterator
+    return dataset.build_train_data(
+        self._data_config['train'],
+        self._train_seed,
+        self._batch_size)
 
   def _build_eval_data(self):
     """Builds eval data drawn from same distribution as training data."""
@@ -232,8 +245,6 @@ class Experiment(experiment.AbstractExperiment):
 
     params, opt_state, loss = self._update_fn(self._params, inputs, targets)
 
-    self._params = params
-    self._opt_state = opt_state
     learning_rate = self._sched(global_step)[0]
     scalars = {
         'loss': loss,
@@ -242,8 +253,23 @@ class Experiment(experiment.AbstractExperiment):
     if is_logging_step and global_step > 299:
       eval_scalars = self.evaluate(global_step=global_step, rng=rng, writer=writer)
       scalars.update(eval_scalars)
+
+      grads = analysis.get_grads(
+          mean_squared_error,
+          self._params,
+          self._model,
+          inputs,
+          targets,
+      )
+      scalars['grads'] = wandb.Histogram(grads)
       wandb.log(scalars, step=global_step)
       print(scalars)
+
+    if global_step > 0 and global_step % 2000 == 0:
+      self.save_state(global_step)
+
+    self._params = params
+    self._opt_state = opt_state
 
     return scalars
 
@@ -254,25 +280,30 @@ class Experiment(experiment.AbstractExperiment):
     for idx, (inputs, targets) in enumerate(self._aoc_data):
       error, predictions = rounded_mean_squared_error(self._params, self._model, inputs, targets)
       print(f'Error #{idx}: {error:.1f}')
+      # if we're on the last batch, let's print the model's behavior on the last
+      # example which should correspond to answer for the advent of code
+      # challenge: [1940, 861].
+      from_end = idx == 9
       show_model_predictions(inputs, targets, predictions)
       errors.append(error)
     summed_error = np.sum(errors)
     self._aoc_data = self._build_aoc_data()
+    
     return {'aoc_summed_error': summed_error}
 
 
-def show_model_predictions(inputs, targets, predictions, num_examples=1):
-  """Prints out model prediction versus ground truth."""
-  for i in range(num_examples):
-    prediction = predictions[i]
-    target = targets[i]
-    example = inputs[i]
-    pos = example[:2]
-    cmd_onehot = example[2:5]
-    cmd_idx = np.argmax(cmd_onehot)
-    cmd = dataset.Commands(cmd_idx).name
-    magnitude = example[5]
-    print(f'Input pos: {pos[0]}, {pos[1]}, {cmd} {magnitude} --> True: {target[0]}, {target[1]}, Model: {prediction[0]}, {prediction[1]}')
+  def save_state(self, global_step):
+    snapshot_state = {}
+    for attr_name, chk_name in self.NON_BROADCAST_CHECKPOINT_ATTRS.items():
+      snapshot_state[chk_name] = getattr(self, attr_name)
+    chk_file = f'{global_step[0]}.pickle'
+    chk_path = os.path.join(self._config.checkpoint_dir, chk_file)
+    with open(chk_path, mode='wb') as f:
+      pickle.dump(snapshot_state, f)
+    logging.log(
+        logging.INFO,
+        f'Saved checkpoint to: {chk_path} with keys: {snapshot_state.keys()}'
+    )
   
   
 
