@@ -35,6 +35,7 @@ jax.config.update('jax_platform_name', 'gpu')
 run = wandb.init(project='aoc_2021_day2_part1', entity='elpiloto')
 
 
+
 def get_config():
   # Common config to all jaxline experiments.
   config = base_config.get_base_config()
@@ -50,7 +51,7 @@ def get_config():
   exp.train_seed = 107993
   exp.eval_seed = 8802
   exp.learning_rate = 1e-1
-  exp.batch_size = 256
+  exp.batch_size = 512
 
   exp.data_config = ml_collections.ConfigDict()
   train = exp.data_config.train = ml_collections.ConfigDict()
@@ -68,7 +69,7 @@ def get_config():
 
   model = exp.model = ml_collections.ConfigDict()
   model.name = 'skip_connection_mlp'
-  model.output_sizes = [2]
+  model.output_sizes = [32, 2]
   model.activation_fn = 'relu'
   model.magnitude_scale = 10.
   model.remove_pos = True
@@ -266,7 +267,7 @@ class Experiment(experiment.AbstractExperiment):
       print(scalars)
 
     if global_step > 0 and global_step % 2000 == 0:
-      self.save_state(global_step)
+      self.save_state(global_step, chkpoint_name=run.name)
 
     self._params = params
     self._opt_state = opt_state
@@ -292,11 +293,11 @@ class Experiment(experiment.AbstractExperiment):
     return {'aoc_summed_error': summed_error}
 
 
-  def save_state(self, global_step):
+  def save_state(self, global_step, name='checkpoint'):
     snapshot_state = {}
     for attr_name, chk_name in self.NON_BROADCAST_CHECKPOINT_ATTRS.items():
       snapshot_state[chk_name] = getattr(self, attr_name)
-    chk_file = f'{global_step[0]}.pickle'
+    chk_file = f'{name}_{global_step[0]}.pickle'
     chk_path = os.path.join(self._config.checkpoint_dir, chk_file)
     with open(chk_path, mode='wb') as f:
       pickle.dump(snapshot_state, f)
