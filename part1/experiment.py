@@ -50,7 +50,7 @@ def get_config():
   exp = config.experiment_kwargs = ml_collections.ConfigDict()
   exp.train_seed = 107993
   exp.eval_seed = 8802
-  exp.learning_rate = 1e-1
+  exp.learning_rate = 1e-3
   exp.batch_size = 512
 
   exp.data_config = ml_collections.ConfigDict()
@@ -266,7 +266,7 @@ class Experiment(experiment.AbstractExperiment):
       wandb.log(scalars, step=global_step)
       print(scalars)
 
-    if global_step > 0 and global_step % 2000 == 0:
+    if global_step > 0 and global_step % 600 == 0:
       self.save_state(global_step, chkpoint_name=run.name)
 
     self._params = params
@@ -293,11 +293,11 @@ class Experiment(experiment.AbstractExperiment):
     return {'aoc_summed_error': summed_error}
 
 
-  def save_state(self, global_step, name='checkpoint'):
+  def save_state(self, global_step, chkpoint_name='checkpoint'):
     snapshot_state = {}
     for attr_name, chk_name in self.NON_BROADCAST_CHECKPOINT_ATTRS.items():
       snapshot_state[chk_name] = getattr(self, attr_name)
-    chk_file = f'{name}_{global_step[0]}.pickle'
+    chk_file = f'{chkpoint_name}_{global_step[0]}.pickle'
     chk_path = os.path.join(self._config.checkpoint_dir, chk_file)
     with open(chk_path, mode='wb') as f:
       pickle.dump(snapshot_state, f)

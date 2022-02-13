@@ -49,7 +49,7 @@ def get_grads(loss_fn, params, model, inputs, targets):
 
 
 def main():
-  chk_pt_file = './checkpoints/12000.pickle'
+  chk_pt_file = './checkpoints/leafy-vortex-72_3000.pickle'
   chk_pt = load_checkpoint(chk_pt_file)
   config = chk_pt['_config']
   params = chk_pt['_params']
@@ -60,7 +60,6 @@ def main():
   grad_fn = jax.grad(exp.mean_squared_error)
   grads = grad_fn(params, model, inputs, targets)
   flat_grads, _ = flatten_util.ravel_pytree(grads)
-
 
 
 if __name__ == '__main__':
