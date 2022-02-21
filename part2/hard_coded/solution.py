@@ -1,5 +1,6 @@
 from typing import List, Optional, Tuple
 import numpy as np
+from tabulate import tabulate
 
 
 INPUT_FILE = '../aoc_input.txt'
@@ -25,7 +26,7 @@ def solve(lines: List[str]):
   # pos.x, pos.y, aim
   state = np.zeros(shape=(3), dtype=np.float64)
   max_aim = -1
-  for l in lines:
+  for idx, l in enumerate(lines):
     cmd, magnitude = parse_line(l)
     delta = cmd_to_vector[cmd] * magnitude
     if cmd == 'forward':
@@ -33,6 +34,9 @@ def solve(lines: List[str]):
       delta += np.array([0., aim * magnitude, 0.], np.float64)
     state += delta
     max_aim = max(max_aim, state[-1])
+    print(tabulate({'#': [idx], 'pos': [state[:2]], 'aim': [state[-1]]},
+      headers='keys'))
+    print('\n')
   # TODO(elpiloto): This will mess you up if you don't fix it before printing
   # final answer.
   product = np.prod(state[0:2])

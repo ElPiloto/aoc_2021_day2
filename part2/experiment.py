@@ -24,6 +24,7 @@ import wandb
 import analysis
 import dataset
 import models
+import utils
 
 np.set_printoptions(suppress=True, precision=5)
 tf.config.set_visible_devices([], 'GPU')
@@ -31,6 +32,8 @@ FLAGS = flags.FLAGS
 
 # This may be unnecessary, try removing it when you have free time.
 jax.config.update('jax_platform_name', 'gpu')
+# Probably need it for precision.
+# jax.config.update("jax_enable_x64", True)
 
 run = wandb.init(project='aoc_2021_day2_part2', entity='elpiloto')
 
@@ -76,7 +79,7 @@ def get_config():
 
   model = exp.model = ml_collections.ConfigDict()
   model.name = 'skip_connection_mlp'
-  model.output_sizes = [32, 32, 3]
+  model.output_sizes = [64, 64, 3]
   model.activation_fn = 'relu'
   model.magnitude_scale = 10.
   model.remove_pos = True
@@ -102,18 +105,19 @@ def rounded_mean_squared_error(params, model, inputs, targets):
   # dimensions: [batch_size, 3]
   error = jnp.square(model_output - targets)
   pos_error = error[:, :2]
-  aim_error = error[-1:]
+  aim_error = error[:, -1:]
   def sum_and_mse(x):
     summed = jnp.sum(x, axis=-1)
-    mse = jnp.mean(x)
-    return x
+    mse = jnp.mean(summed)
+    return mse
 
   return sum_and_mse(pos_error), sum_and_mse(aim_error), sum_and_mse(error), model_output
 
 
 def show_model_predictions(inputs, targets, predictions, num_examples=1,
-    from_end=False):
+    from_end=False, silent=False):
   """Prints out model prediction versus ground truth."""
+  this_example = {}
   for i in range(num_examples):
     if from_end:
       prediction = predictions[-(i+1)]
@@ -127,7 +131,14 @@ def show_model_predictions(inputs, targets, predictions, num_examples=1,
     cmd = dataset.Commands(cmd_idx).name
     magnitude = example[5]
     aim = example[6]
-    print(f'Input pos: {pos[0]}, {pos[1]}, {cmd} {magnitude}, {aim}\n-->  True: {target[0]}, {target[1]}, AIM: {target[2]},\n--> Model: {prediction[0]}, {prediction[1]}, AIM: {prediction[2]}')
+    if not silent:
+      print(f'Input pos: {pos[0]}, {pos[1]}, {cmd} {magnitude}, {aim}\n-->  True: {target[0]}, {target[1]}, AIM: {target[2]},\n--> Model: {prediction[0]}, {prediction[1]}, AIM: {prediction[2]}')
+    this_example = {
+        'Input pos': f'{pos[0]}, {pos[1]}, {cmd} {magnitude}, {aim}',
+        'True': f'{target[0]}, {target[1]}, AIM: {target[2]}',
+        'Model': f'{prediction[0]}, {prediction[1]}, AIM: {prediction[2]}'
+    }
+  return this_example
 
 class Experiment(experiment.AbstractExperiment):
 
@@ -285,7 +296,7 @@ class Experiment(experiment.AbstractExperiment):
       )
       scalars['grads'] = wandb.Histogram(grads)
       wandb.log(scalars, step=global_step)
-      print(scalars)
+      utils.table_print(scalars, 'green', 'red')
 
     if global_step > 0 and global_step % 600 == 0:
       self.save_state(global_step, chkpoint_name=run.name)
@@ -303,14 +314,23 @@ class Experiment(experiment.AbstractExperiment):
     aim_errors = []
     for idx, (inputs, targets) in enumerate(self._aoc_data):
       pos_error, aim_error, error, predictions = rounded_mean_squared_error(self._params, self._model, inputs, targets)
-      print(f'Error #{idx}: {error:.1f}')
-      print(f'Aim Error #{idx}: {aim_error:.1f}')
-      print(f'Pos Error #{idx}: {pos_error:.1f}')
+      log_msg = {
+          f'Error #{idx}': error,
+          f'Aim Error #{idx}': aim_error,
+          f'Pos Error #{idx}': pos_error,
+      }
+      # print(f'Error #{idx}: {error:.1f}')
+      # print(f'Aim Error #{idx}: {aim_error:.1f}')
+      # print(f'Pos Error #{idx}: {pos_error:.1f}')
       # if we're on the last batch, let's print the model's behavior on the last
       # example which should correspond to answer for the advent of code
       # challenge: [1940, 861].
       from_end = idx == 9
-      show_model_predictions(inputs, targets, predictions)
+      log_msg.update(
+          show_model_predictions(inputs, targets, predictions,
+            from_end=from_end, silent=True)
+      )
+      utils.table_print(log_msg, 'yellow', 'blue')
       errors.append(error)
       aim_errors.append(aim_error)
       pos_errors.append(pos_error)
